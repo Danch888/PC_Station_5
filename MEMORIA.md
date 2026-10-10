@@ -13,7 +13,9 @@ Este arquivo é um registro contínuo e persistente de longo prazo para as opera
 - **Isolamento de Memória (Memória Direta):** Foi levantado via README que emulação para Windows compromete a memória virtual total na alocação de memória direta (até 13.8 GB por título). Considerar estratégias de mitigação no futuro.
 
 ## Bugs e Problemas Encontrados
-- *Nenhum bug reportado no fork inicial.*
+- **Erro Crítico de Pull Request (Upstream vs Fork):** Um PR foi aberto acidentalmente contra o repositório original `AnyPS5` e com múltiplos assuntos misturados (documentação massiva, traduções, stubs de código não testados). O PR foi rejeitado e fechado.
+  - **Ação Corretiva Permanente:** Todos os PRs devem ser abertos **exclusivamente** contra o fork `PC_Station_5`. PRs para o repositório original estão estritamente proibidos, a menos que autorizado explicitamente.
+  - **Regra de Atomicidade:** Um PR = Um Tópico. Misturar documentação com alterações de código (como stubs) é proibido. As mudanças devem ser granulares, focadas e testáveis (se envolverem código).
 
 ## Mapeamentos Validados
 - A definir nas próximas etapas (Fase 4).
