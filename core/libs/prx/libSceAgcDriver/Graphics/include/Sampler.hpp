@@ -22,6 +22,8 @@ public:
     bool ForcesDegamma() const;
     VkSampler Handle() const;
     bool RequiresFilterMinmax() const;
+    bool ReadsOpaqueBlackBorder() const;
+    bool RequiresNonSeamlessCube() const;
 
 private:
     void release() noexcept;
@@ -30,6 +32,8 @@ private:
     bool forcesDegamma = false;
     VkSampler sampler = VK_NULL_HANDLE;
     bool requiresFilterMinmax = false;
+    bool opaqueBlackBorder = false;
+    bool requiresNonSeamlessCube = false;
 };
 
 // One VkSampler per distinct S# (its 4 words plus the shader's depth-compare use and the
@@ -63,6 +67,8 @@ private:
 
 void RequireFilterMinmax(const Context& context, VkFormat format, std::uint32_t samplerMask, std::span<const std::shared_ptr<Sampler>> samplers);
 void RequireDegammaFormat(std::uint32_t guestFormat, std::uint32_t samplerMask, std::span<const std::shared_ptr<Sampler>> samplers);
+void RequireBorderSwizzle(std::uint32_t bcSwizzle, std::uint32_t samplerMask, std::span<const std::shared_ptr<Sampler>> samplers);
+void RequireNonSeamlessCube(bool cube, std::uint32_t samplerMask, std::span<const std::shared_ptr<Sampler>> samplers);
 
 }
 

@@ -70,7 +70,11 @@ std::vector<GuestArtifact> GuestModuleBuilder::Build(const std::filesystem::path
         char magic[4]{};
         stream.read(magic, 4);
         if (stream.bad()) throw Domain::RelinkerException("Cannot read guest candidate magic: " + path.string());
-        return stream.gcount() == 4 && static_cast<unsigned char>(magic[0]) == 0x7f && magic[1] == 'E' && magic[2] == 'L' && magic[3] == 'F';
+        if (stream.gcount() != 4) return false;
+        const auto byte = [&](const std::size_t index) { return static_cast<unsigned char>(magic[index]); };
+        const bool self = (byte(0) == 0x4f && byte(1) == 0x15 && byte(2) == 0x3d && byte(3) == 0x1d) || (byte(0) == 0x54 && byte(1) == 0x14 && byte(2) == 0xf5 && byte(3) == 0xee);
+        if (self) throw Domain::RelinkerException("Guest module is a SELF container, not an ELF: " + path.string());
+        return byte(0) == 0x7f && magic[1] == 'E' && magic[2] == 'L' && magic[3] == 'F';
     };
     for (const auto& directory : directories) {
         if (!std::filesystem::is_directory(directory)) throw Domain::RelinkerException("Guest module path is not a directory: " + directory.string());
@@ -95,19 +99,22 @@ std::vector<GuestArtifact> GuestModuleBuilder::Build(const std::filesystem::path
         if (alias != paths.end()) neededAliases.emplace(name, *alias);
         else missingNeeded.insert(name);
     }
-    if (!missingNeeded.empty()) {
+    if (!missingNeeded.empty() || !unmatchedExclusions.empty()) {
         std::map<std::string, std::filesystem::path> found;
         std::map<std::string, std::filesystem::path> foundByStem;
         const auto record = [](std::map<std::string, std::filesystem::path>& matches, const std::string& name, const std::filesystem::path& path) {
             if (!matches.emplace(name, path).second) throw Domain::RelinkerException("Ambiguous needed module: " + matches.at(name).string() + " and " + path.string());
         };
         for (auto it = std::filesystem::recursive_directory_iterator(root); it != std::filesystem::recursive_directory_iterator(); ++it) {
-            if (it->is_directory() && std::find(directories.begin(), directories.end(), it->path()) != directories.end()) {
-                it.disable_recursion_pending();
-                continue;
-            }
             if (!it->is_regular_file()) continue;
             const auto name = it->path().filename().string();
+            if (name.ends_with(GuestModuleSuffix)) continue;
+            if (excludedModules.contains(name)) {
+                for (auto parent = it->path().parent_path(); parent != root && !parent.empty(); parent = parent.parent_path()) {
+                    if (std::any_of(directories.begin(), directories.end(), [&](const auto& directory) { return std::filesystem::equivalent(parent, directory); })) unmatchedExclusions.erase(name);
+                }
+                continue;
+            }
             const auto stem = ModuleStem(name, windows);
             std::vector<std::string> stemMatches;
             if (!stem.empty()) {
@@ -149,10 +156,6 @@ std::vector<GuestArtifact> GuestModuleBuilder::Build(const std::filesystem::path
     if (!unresolved.empty()) {
         std::map<std::string, std::filesystem::path> identities;
         for (auto it = std::filesystem::recursive_directory_iterator(root); it != std::filesystem::recursive_directory_iterator(); ++it) {
-            if (it->is_directory() && std::find(directories.begin(), directories.end(), it->path()) != directories.end()) {
-                it.disable_recursion_pending();
-                continue;
-            }
             const auto& path = it->path();
             const auto extension = path.extension().string();
             if (!it->is_regular_file() || (extension != ".prx" && extension != ".sprx" && extension != ".suprx") ||

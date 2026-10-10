@@ -123,7 +123,7 @@ GuestTextureResource DecodeTextureResource(std::span<const std::uint32_t> words)
             std::fprintf(stderr, "[gpu] texture DCC color transform is ignored (word6=0x%08x word7=0x%08x)\n", words[6], words[7]);
         }
     }
-    Require(bcSwizzle == 0, "guest texture descriptor uses a BC swizzle which is not implemented");
+    Require(bcSwizzle <= 5u, "guest texture descriptor uses a reserved BC swizzle");
 
     Require(baseLevel <= lastLevel, "guest texture descriptor has a base mip level past its last mip level");
 
@@ -195,6 +195,7 @@ GuestTextureResource DecodeTextureResource(std::span<const std::uint32_t> words)
     result.dstSelY = static_cast<std::uint8_t>(dstSelY);
     result.dstSelZ = static_cast<std::uint8_t>(dstSelZ);
     result.dstSelW = static_cast<std::uint8_t>(dstSelW);
+    result.bcSwizzle = static_cast<std::uint8_t>(bcSwizzle);
     result.dccAddress = metaCompress ? metaAddr << 8u : 0u;
     result.dccAlphaOnMsb = dccAlphaPos;
     result.dccPipeAligned = metaPipeAligned;
@@ -209,6 +210,10 @@ GuestTextureResource DecodeTextureResource(std::span<const std::uint32_t> words)
 float EffectiveMinLod(const GuestTextureResource& resource) {
     if (resource.minLod <= resource.baseLevel * 256u) return 0.0f;
     return std::min(static_cast<float>(resource.minLod) / 256.0f, static_cast<float>(resource.lastLevel));
+}
+
+bool DescriptorSingleLevel(std::span<const std::uint32_t> words) {
+    return ((words[3] >> 12u) & 0xfu) == ((words[3] >> 16u) & 0xfu);
 }
 
 bool MatchesGuestDimension(ShaderRecompiler::DescriptorImageShape shape, TextureDimension dimension) {

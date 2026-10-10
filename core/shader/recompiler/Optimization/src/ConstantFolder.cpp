@@ -54,6 +54,28 @@ template <typename TFunction> bool foldU64Shift(IrBuilder& builder, IrValue& ins
     return true;
 }
 
+bool foldConstantBitTest(IrBuilder& builder, IrValue& inst) {
+    auto& left = resolveArg(inst, 0);
+    auto& right = resolveArg(inst, 1);
+    if (!isImmediate(right, IrType::U32) || right.ImmediateU32() != 0u || left.Opcode() != IrOpcode::BitwiseAnd32) return false;
+    auto& first = resolveArg(left, 0);
+    auto& second = resolveArg(left, 1);
+    IrValue* shifted = nullptr;
+    if (isImmediate(second, IrType::U32) && second.ImmediateU32() == 1u) shifted = &first;
+    else if (isImmediate(first, IrType::U32) && first.ImmediateU32() == 1u) shifted = &second;
+    if (shifted == nullptr || shifted->Opcode() != IrOpcode::ShiftRightLogical32) return false;
+    auto& word = resolveArg(*shifted, 0);
+    auto& amount = resolveArg(*shifted, 1);
+    if (!isImmediate(word, IrType::U32) || (word.ImmediateU32() != 0u && word.ImmediateU32() != 0xffffffffu)) return false;
+    if (amount.Opcode() != IrOpcode::BitwiseAnd32) return false;
+    auto& amountLeft = resolveArg(amount, 0);
+    auto& amountRight = resolveArg(amount, 1);
+    const bool masked = (isImmediate(amountLeft, IrType::U32) && amountLeft.ImmediateU32() == 31u) || (isImmediate(amountRight, IrType::U32) && amountRight.ImmediateU32() == 31u);
+    if (!masked) return false;
+    replaceWith(inst, builder.ConstantBool(word.ImmediateU32() != 0u));
+    return true;
+}
+
 template <typename TFunction> bool foldU32Compare(IrBuilder& builder, IrValue& inst, TFunction function) {
     auto& lhs = resolveArg(inst, 0);
     auto& rhs = resolveArg(inst, 1);
@@ -186,18 +208,27 @@ bool foldCompositeExtract(IrBuilder& builder, IrValue& inst, IrOpcode construct,
 }
 
 bool forwardsWord(const IrUse& use) {
-    return use.user->Opcode() == IrOpcode::Identity || (use.user->Opcode() == IrOpcode::SelectU32 && use.operand != 0u);
+    return use.user->Opcode() == IrOpcode::Identity || use.user->Opcode() == IrOpcode::Phi || (use.user->Opcode() == IrOpcode::SelectU32 && use.operand != 0u);
 }
 
-void collectReaders(IrValue& value, std::vector<IrUse>& readers) {
+void collectReaders(IrValue& value, std::vector<IrUse>& readers, std::vector<const IrValue*>& visited) {
+    if (std::ranges::find(visited, &value) != visited.end()) {
+        return;
+    }
+    visited.push_back(&value);
     const std::vector<IrUse> uses = value.OperandUses();
     for (const IrUse& use : uses) {
         if (forwardsWord(use)) {
-            collectReaders(*use.user, readers);
+            collectReaders(*use.user, readers, visited);
         } else {
             readers.push_back(use);
         }
     }
+}
+
+void collectReaders(IrValue& value, std::vector<IrUse>& readers) {
+    std::vector<const IrValue*> visited;
+    collectReaders(value, readers, visited);
 }
 
 constexpr std::array<std::pair<std::uint32_t, std::uint32_t>, 2> packedFields {{{8u, 4u}, {16u, 13u}}};
@@ -608,7 +639,7 @@ bool ConstantFolder::tryFoldValue(IrProgram& program, IrValue& value) const {
             return foldU32(builder, value, [](std::uint32_t a, std::uint32_t b) { return std::max(a, b); });
         }
         case IrOpcode::IEqual32: return foldU32Compare(builder, value, [](std::uint32_t a, std::uint32_t b) { return a == b; });
-        case IrOpcode::INotEqual32: return foldU32Compare(builder, value, [](std::uint32_t a, std::uint32_t b) { return a != b; });
+        case IrOpcode::INotEqual32: return foldConstantBitTest(builder, value) || foldU32Compare(builder, value, [](std::uint32_t a, std::uint32_t b) { return a != b; });
         case IrOpcode::ULessThan32: return foldU32Compare(builder, value, [](std::uint32_t a, std::uint32_t b) { return a < b; });
         case IrOpcode::ULessThanEqual32: return foldU32Compare(builder, value, [](std::uint32_t a, std::uint32_t b) { return a <= b; });
         case IrOpcode::UGreaterThan32: return foldU32Compare(builder, value, [](std::uint32_t a, std::uint32_t b) { return a > b; });

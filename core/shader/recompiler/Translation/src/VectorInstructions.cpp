@@ -31,6 +31,7 @@ std::uint32_t TranslationContext::f32DenormalFlushFor(const RdnaInstruction& ins
     case RdnaOpcode::VSubrevF32:
     case RdnaOpcode::VMulF32:
     case RdnaOpcode::VMulLegacyF32:
+    case RdnaOpcode::VMullitF32:
     case RdnaOpcode::VMinF32:
     case RdnaOpcode::VMaxF32:
     case RdnaOpcode::VMin3F32:
@@ -91,6 +92,7 @@ std::uint32_t TranslationContext::f32DenormalFlushFor(const RdnaInstruction& ins
         flush = 1u;
         break;
     case RdnaOpcode::VMadLegacyF32:
+    case RdnaOpcode::VMacLegacyF32:
         return 3u;
     default:
         return 0u;
@@ -621,9 +623,9 @@ bool TranslationContext::emitVector(const RdnaInstruction& inst) {
     case RdnaOpcode::VSatPkU8I16:
         return vSatPkU8I16(inst);
     case RdnaOpcode::VMulLegacyF32:
-        return vMulLegacyF32(inst, false);
+        return vMulLegacyF32(inst);
     case RdnaOpcode::VMacLegacyF32:
-        return vMulLegacyF32(inst, true);
+        return vFmaLegacyF32(inst, true);
     case RdnaOpcode::VMullitF32:
         return vMullitF32(inst);
     case RdnaOpcode::VCmpClassF32:
@@ -890,9 +892,9 @@ bool TranslationContext::emitVector(const RdnaInstruction& inst) {
     case RdnaOpcode::VMulF16:
         return float16Binary(inst, IrOpcode::FPMul32, false);
     case RdnaOpcode::VMinF16:
-        return float16Binary(inst, IrOpcode::FPMin32, false);
+        return minMaxF16(inst, IrOpcode::FPMin32);
     case RdnaOpcode::VMaxF16:
-        return float16Binary(inst, IrOpcode::FPMax32, false);
+        return minMaxF16(inst, IrOpcode::FPMax32);
     case RdnaOpcode::VFmacF16:
         return float16Ternary(inst, IrOpcode::FPFma32, true, false);
     case RdnaOpcode::VFmamkF16:
@@ -927,11 +929,11 @@ bool TranslationContext::emitVector(const RdnaInstruction& inst) {
     case RdnaOpcode::VCosF16:
         return float16Unary(inst, IrOpcode::FPCos);
     case RdnaOpcode::VMin3F16:
-        return float16Ternary(inst, IrOpcode::FPMinTri32, false, false);
+        return minMaxF16(inst, IrOpcode::FPMinTri32);
     case RdnaOpcode::VMax3F16:
-        return float16Ternary(inst, IrOpcode::FPMaxTri32, false, false);
+        return minMaxF16(inst, IrOpcode::FPMaxTri32);
     case RdnaOpcode::VMed3F16:
-        return float16Ternary(inst, IrOpcode::FPMedTri32, false, false);
+        return minMaxF16(inst, IrOpcode::FPMedTri32);
     case RdnaOpcode::VDivFixupF16:
         return vDivFixupF16(inst);
     case RdnaOpcode::VFrexpMantF32:
@@ -943,37 +945,37 @@ bool TranslationContext::emitVector(const RdnaInstruction& inst) {
     case RdnaOpcode::VFmaF64:
         return float64Operation(inst, IrOpcode::FPFma64);
     case RdnaOpcode::VMinF64:
-        return float64Operation(inst, IrOpcode::FPMin64);
+        return ieeeMode ? float64Operation(inst, IrOpcode::FPMin64) : nonIeeeMinMaxF64(inst, IrOpcode::FPMin64);
     case RdnaOpcode::VMaxF64:
-        return float64Operation(inst, IrOpcode::FPMax64);
+        return ieeeMode ? float64Operation(inst, IrOpcode::FPMax64) : nonIeeeMinMaxF64(inst, IrOpcode::FPMax64);
     case RdnaOpcode::VLdexpF64:
-        return float64Operation(inst, IrOpcode::FPLdexp64);
+        return float64Unary(inst, IrOpcode::FPLdexp64);
     case RdnaOpcode::VTruncF64:
-        return float64Operation(inst, IrOpcode::FPTrunc64);
+        return float64Unary(inst, IrOpcode::FPTrunc64);
     case RdnaOpcode::VCeilF64:
-        return float64Operation(inst, IrOpcode::FPCeil64);
+        return float64Unary(inst, IrOpcode::FPCeil64);
     case RdnaOpcode::VRndneF64:
-        return float64Operation(inst, IrOpcode::FPRoundEven64);
+        return float64Unary(inst, IrOpcode::FPRoundEven64);
     case RdnaOpcode::VFloorF64:
-        return float64Operation(inst, IrOpcode::FPFloor64);
+        return float64Unary(inst, IrOpcode::FPFloor64);
     case RdnaOpcode::VFractF64:
-        return float64Operation(inst, IrOpcode::FPFract64);
+        return float64Unary(inst, IrOpcode::FPFract64);
     case RdnaOpcode::VRcpF64:
-        return float64Operation(inst, IrOpcode::FPRcp64);
+        return float64Unary(inst, IrOpcode::FPRcp64);
     case RdnaOpcode::VRsqF64:
-        return float64Operation(inst, IrOpcode::FPRsq64);
+        return float64Unary(inst, IrOpcode::FPRsq64);
     case RdnaOpcode::VSqrtF64:
-        return float64Operation(inst, IrOpcode::FPSqrt64);
+        return float64Unary(inst, IrOpcode::FPSqrt64);
     case RdnaOpcode::VTrigPreopF64:
         return float64Operation(inst, IrOpcode::FPTrigPreop64);
     case RdnaOpcode::VFrexpMantF64:
-        return float64Operation(inst, IrOpcode::FPFrexpMant64);
+        return float64Unary(inst, IrOpcode::FPFrexpMant64);
     case RdnaOpcode::VFrexpExpI32F64:
         return float64Operation(inst, IrOpcode::FPFrexpExp64);
     case RdnaOpcode::VCvtF32F64:
         return float64Operation(inst, IrOpcode::ConvertF32F64);
     case RdnaOpcode::VCvtF64F32:
-        return float64Operation(inst, IrOpcode::ConvertF64F32);
+        return vCvtF64F32(inst);
     case RdnaOpcode::VCvtF64I32:
         return float64Operation(inst, IrOpcode::ConvertF64S32);
     case RdnaOpcode::VCvtF64U32:
@@ -1042,7 +1044,7 @@ bool TranslationContext::emitVector(const RdnaInstruction& inst) {
     case RdnaOpcode::VFmaF32:
         return floatTernary(inst, roundsProductSeparately(inst) ? IrOpcode::FPMad32 : IrOpcode::FPFma32, false, true);
     case RdnaOpcode::VMadLegacyF32:
-        return vFmaLegacyF32(inst);
+        return vFmaLegacyF32(inst, false);
     case RdnaOpcode::VMin3F32:
         return ieeeMode ? ieeeMinMaxF32(inst, IrOpcode::FPMinTri32) : floatTernary(inst, IrOpcode::FPMinTri32, false, false);
     case RdnaOpcode::VMax3F32:

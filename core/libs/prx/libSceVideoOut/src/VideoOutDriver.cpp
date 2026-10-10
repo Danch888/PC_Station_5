@@ -6,6 +6,7 @@
 #include <thread>
 #include <limits>
 #include <stdexcept>
+#include <string>
 
 #include "SDL.h"
 #include "SDL_vulkan.h"
@@ -64,6 +65,30 @@ void checkConfig(const VideoOutConfig& cfg) {
     cfg.Check();
 }
 
+void resolveFlipBuffer(FlipRequest& request, const VideoOutConfig& cfg) {
+    if (request.index < 0) {
+        request.width = cfg.width;
+        request.height = cfg.height;
+        return;
+    }
+    request.buffer = cfg.buffers[request.index];
+    if (!request.buffer.Occupied()) {
+        static std::array<std::atomic<bool>, VIDEO_OUT_BUFFER_NUM_MAX> reported{};
+        if (!reported[request.index].exchange(true)) std::fprintf(stderr, "[videoout] GPU flip of unregistered buffer %d on handle %u presents black\n", request.index, request.outputHandle);
+        request.unregistered = true;
+        request.width = cfg.width;
+        request.height = cfg.height;
+        return;
+    }
+    require(request.buffer.groupIndex < VIDEO_OUT_BUFFER_ATTRIBUTE_NUM_MAX, "invalid buffer group");
+    request.group = cfg.groups[request.buffer.groupIndex];
+    require(request.group.occupied, "buffer group is not registered");
+    require(request.buffer.dataAddress != 0, "null registered buffer address");
+    static_cast<void>(DescribeVideoOutBuffer(request.buffer, request.group));
+    request.width = request.group.attribute.width;
+    request.height = request.group.attribute.height;
+}
+
 class RenderingWait final : public AgcDriver::IRenderingWait {
     std::shared_ptr<VideoOutConfig> _config;
     std::uint32_t _index;
@@ -118,20 +143,6 @@ public:
         if (queue->stopping || cfg->shutdownToken.stop_requested()) throw ProcessShutdown{};
         std::lock_guard lock(cfg->mutex);
         checkConfig(*cfg);
-        if (info.index >= 0) {
-            request->buffer = cfg->buffers[info.index];
-            require(request->buffer.Occupied(), "flip buffer is not registered");
-            require(request->buffer.groupIndex < VIDEO_OUT_BUFFER_ATTRIBUTE_NUM_MAX, "invalid buffer group");
-            request->group = cfg->groups[request->buffer.groupIndex];
-            require(request->group.occupied, "buffer group is not registered");
-            require(request->buffer.dataAddress != 0, "null registered buffer address");
-            static_cast<void>(DescribeVideoOutBuffer(request->buffer, request->group));
-            request->width = request->group.attribute.width;
-            request->height = request->group.attribute.height;
-        } else {
-            request->width = cfg->width;
-            request->height = cfg->height;
-        }
         request->generation = cfg->generation;
         request->flipRate = cfg->flipRate;
         if (info.index >= 0) request->reuseTicket = cfg->bufferReuse[info.index].Reserve();
@@ -205,6 +216,7 @@ void FlipRequest::GpuReady(const std::shared_ptr<AgcDriver::FrameTiming>& frameT
             return;
         }
         require(reserved && !ready && !terminal && cfg->generation == generation, "invalid flip readiness transition");
+        resolveFlipBuffer(*this, *cfg);
         readiness.Mark("locks_validate");
         queuedAt = AgcDriver::FrameTiming::Clock::now();
         queue->requests.push_back(shared_from_this());
@@ -315,6 +327,7 @@ int VideoOutDriver::Open(int busType) {
     }
     auto cfg = std::make_shared<VideoOutConfig>();
     cfg->generation = generation;
+    cfg->busType = busType;
     cfg->opened = true;
     cfg->flipStatus.flipArg = -1;
     cfg->flipStatus.currentBuffer = -1;
@@ -464,28 +477,37 @@ void VideoOutDriver::processFlip(FlipRequest& req) {
         req.cfg->lastFlipVblank = req.cfg->vblankStatus.count;
     }
     require(req.width != 0 && req.height != 0 && req.width <= static_cast<uint32_t>(std::numeric_limits<int>::max()) && req.height <= static_cast<uint32_t>(std::numeric_limits<int>::max()), "invalid window dimensions");
-    window.Ensure(req.width, req.height);
-    const auto extensions = windowExtensions(window.Handle());
-    const AgcDriver::PresentationWindow target{window.Handle(), extensions, &createWindowSurface, &windowDrawableSize, req.width, req.height, req.timing};
-    timing.Mark("window_prepare");
-    const auto gpuReady = [](void* context) {
-        auto& request = *static_cast<FlipRequest*>(context);
-        std::lock_guard lock(request.cfg->mutex);
-        request.cfg->CheckAlive();
-        if (request.cfg->Closed()) return;
-        require(!request.terminal && !request.gpuComplete, "invalid GPU completion transition");
-        request.gpuComplete = true;
-        request.cfg->vblankCond.notify_all();
-    };
-    if (req.index >= 0) {
-        const auto display = DescribeVideoOutBuffer(req.buffer, req.group);
-        AgcDriverPresentBuffer_nid_postfix(target, display, gpuReady, &req);
+    if (req.cfg->busType == VIDEO_OUT_BUS_TYPE_OVERLAY) {
+        std::lock_guard lock(req.cfg->mutex);
+        req.cfg->CheckAlive();
+        if (!req.cfg->Closed()) {
+            require(!req.terminal && !req.gpuComplete, "invalid GPU completion transition");
+            req.gpuComplete = true;
+        }
     } else {
-        AgcDriverPresentClear_nid_postfix(target, req.index == VIDEO_OUT_BUFFER_INDEX_BLACK, gpuReady, &req);
+        window.Ensure(req.width, req.height);
+        const auto extensions = windowExtensions(window.Handle());
+        const AgcDriver::PresentationWindow target{window.Handle(), extensions, &createWindowSurface, &windowDrawableSize, req.width, req.height, req.timing};
+        timing.Mark("window_prepare");
+        const auto gpuReady = [](void* context) {
+            auto& request = *static_cast<FlipRequest*>(context);
+            std::lock_guard lock(request.cfg->mutex);
+            request.cfg->CheckAlive();
+            if (request.cfg->Closed()) return;
+            require(!request.terminal && !request.gpuComplete, "invalid GPU completion transition");
+            request.gpuComplete = true;
+            request.cfg->vblankCond.notify_all();
+        };
+        if (req.index >= 0 && !req.unregistered) {
+            const auto display = DescribeVideoOutBuffer(req.buffer, req.group);
+            AgcDriverPresentBuffer_nid_postfix(target, display, gpuReady, &req);
+        } else {
+            AgcDriverPresentClear_nid_postfix(target, req.unregistered || req.index == VIDEO_OUT_BUFFER_INDEX_BLACK, gpuReady, &req);
+        }
+        timing.Mark("present");
+        window.UpdateTitle();
+        timing.Mark("window_title");
     }
-    timing.Mark("present");
-    window.UpdateTitle();
-    timing.Mark("window_title");
     std::lock_guard lock(req.cfg->mutex);
     timing.Mark("completion_mutex_wait");
     req.cfg->CheckAlive();

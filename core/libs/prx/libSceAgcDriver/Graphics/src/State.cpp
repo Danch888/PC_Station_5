@@ -270,15 +270,19 @@ void decodeDepthBias(const Registers& cx, std::uint32_t raster, State& result) {
     const bool frontBias = (raster & 0x800u) != 0;
     const bool backBias = (raster & 0x1000u) != 0;
     if (!(front && frontBias) && !(back && backBias)) return;
-    if (front && back && (frontBias != backBias || read(cx, 0x2e0) != read(cx, 0x2e2) || read(cx, 0x2e1) != read(cx, 0x2e3))) throw std::runtime_error("AGC graphics: " + zeroMessage(0x205, raster, "depth bias differing between front and back faces"));
+    const bool perFace = front && back && (frontBias != backBias || read(cx, 0x2e0) != read(cx, 0x2e2) || read(cx, 0x2e1) != read(cx, 0x2e3));
     const bool d16 = result.depth->format == VK_FORMAT_D16_UNORM || result.depth->format == VK_FORMAT_D16_UNORM_S8_UINT;
     const auto format = find(cx, 0x2de) == cx.end() ? (d16 ? 0xf0u : 0x1e9u) : read(cx, 0x2de);
     if (format != (d16 ? 0xf0u : 0x1e9u)) throw std::runtime_error("AGC graphics: " + zeroMessage(0x2de, format, "depth bias in units other than the depth format"));
     const auto scale = front && frontBias ? 0x2e0u : 0x2e2u;
     result.depthBias = true;
-    result.depthBiasSlope = readFloat(cx, scale) / 16.0f;
-    result.depthBiasConstant = readFloat(cx, scale + 1u);
+    result.depthBiasSlope = frontBias || !perFace ? readFloat(cx, scale) / 16.0f : 0.0f;
+    result.depthBiasConstant = frontBias || !perFace ? readFloat(cx, scale + 1u) : 0.0f;
     result.depthBiasClamp = readFloat(cx, 0x2df);
+    if (!perFace) return;
+    result.depthBiasPerFace = true;
+    result.backDepthBiasSlope = backBias ? readFloat(cx, 0x2e2) / 16.0f : 0.0f;
+    result.backDepthBiasConstant = backBias ? readFloat(cx, 0x2e3) : 0.0f;
 }
 
 bool depthPassThrough(std::uint32_t depthControl) {
@@ -321,6 +325,10 @@ VkBlendFactor blendFactor(std::uint32_t value) {
         case 10: return VK_BLEND_FACTOR_SRC_ALPHA_SATURATE;
         case 13: return VK_BLEND_FACTOR_CONSTANT_COLOR;
         case 14: return VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_COLOR;
+        case 15: return VK_BLEND_FACTOR_SRC1_COLOR;
+        case 16: return VK_BLEND_FACTOR_ONE_MINUS_SRC1_COLOR;
+        case 17: return VK_BLEND_FACTOR_SRC1_ALPHA;
+        case 18: return VK_BLEND_FACTOR_ONE_MINUS_SRC1_ALPHA;
         case 19: return VK_BLEND_FACTOR_CONSTANT_ALPHA;
         case 20: return VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA;
         default: throw std::runtime_error("AGC graphics: unsupported blend factor " + std::to_string(value));
@@ -342,6 +350,10 @@ VkBlendFactor alphaFactorWithOpaqueDestination(VkBlendFactor factor) {
         case VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA: case VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR: return VK_BLEND_FACTOR_ZERO;
         default: return factor;
     }
+}
+
+bool secondSource(VkBlendFactor factor) {
+    return factor == VK_BLEND_FACTOR_SRC1_COLOR || factor == VK_BLEND_FACTOR_ONE_MINUS_SRC1_COLOR || factor == VK_BLEND_FACTOR_SRC1_ALPHA || factor == VK_BLEND_FACTOR_ONE_MINUS_SRC1_ALPHA;
 }
 
 VkBlendOp blendOp(std::uint32_t value) {
@@ -741,9 +753,20 @@ State DecodeState(const QueueState& queue) {
             Require(!state.blendEnable, "blending into a 10_11_11 unorm color target is unsupported");
             Require((exportedMask & 7u) == 7u, "partial writes of a 10_11_11 unorm color target are unsupported");
         }
+        if (state.blendEnable && (secondSource(state.srcColorBlendFactor) || secondSource(state.dstColorBlendFactor) || secondSource(state.srcAlphaBlendFactor) || secondSource(state.dstAlphaBlendFactor))) {
+            const auto addition = [](VkBlendOp op) { return op == VK_BLEND_OP_ADD || op == VK_BLEND_OP_SUBTRACT || op == VK_BLEND_OP_REVERSE_SUBTRACT; };
+            Require(addition(state.colorBlendOp) && addition(state.alphaBlendOp), "dual-source blending with a MIN or MAX operation is unsupported");
+            result.dualSourceBlend = true;
+        }
         result.blends[color.exportIndex] = state;
     }
     if (!result.colors.empty()) result.blend = result.blends[result.colors.front().exportIndex];
+    if (result.dualSourceBlend) {
+        Require(exportSlots.size() == 2 && exportSlots[0] == 0 && exportSlots[1] == 1 && exportCount == 1, "dual-source blending needs pixel exports to MRT slots 0 and 1 and color writes to slot 0 alone");
+        Require(result.colors.front().componentMapping == 0xe4u, "dual-source blending into a component-swapped color target is unsupported");
+        Require(((exportFormat >> 4u) & 0xfu) == (exportFormat & 0xfu), "dual-source blending needs the MRT1 export in the MRT0 export format");
+        Require(((shaderMask >> 4u) & 0xfu) == (shaderMask & 0xfu), "dual-source blending needs the MRT1 export with the MRT0 shader mask");
+    }
     APS5_LOG_OUT_DEBUG("DecodeState done colorTarget=%u render=%ux%u topology=%u", result.hasColorTarget ? 1u : 0u, result.renderExtent.width, result.renderExtent.height, static_cast<unsigned>(result.topology));
     return result;
 }
@@ -811,6 +834,8 @@ ColorTarget DecodeColorBuffer(const Registers& cx, std::uint32_t slot) {
         Require(maxMip == 0 && (info & 0x10000000u) == 0, "mipmapped or DCC 3D color targets are unsupported");
         Require(slice < color.depth, "the color view slice is beyond the 3D surface");
         color.depthSlice = slice;
+    } else if ((attrib3 & 0x1fffu) != 0) {
+        Require(slice <= (attrib3 & 0x1fffu), "the color view slice is beyond the array surface");
     }
     color.extent = {((attrib2 >> 14u) & 0x3fffu) + 1u, (attrib2 & 0x3fffu) + 1u};
     color.elementBytes = decoded.elementBytes;
@@ -830,6 +855,10 @@ ColorTarget DecodeColorBuffer(const Registers& cx, std::uint32_t slot) {
     const auto high = read(cx, 0x390 + slot);
     Require((high & ~0xffu) == 0, "invalid color address extension");
     color.surfaceAddress = (static_cast<std::uint64_t>(high) << 40u) | (static_cast<std::uint64_t>(read(cx, 0x318 + stride)) << 8u);
+    if (ColorTileModeIsXor(color.tileMode)) {
+        color.pipeBankXor = static_cast<std::uint32_t>(color.surfaceAddress & (ColorTileModeBlockBytes(color.tileMode) - 1u));
+        color.surfaceAddress -= color.pipeBankXor;
+    }
     if (slice != 0 && !volume) color.surfaceAddress += slice * ComputeSurfaceSize(ComputeElementMipLayout(ColorTextureTileMode(color.tileMode), color.elementBytes, color.surfaceExtent.width, color.surfaceExtent.height, color.mipCount), 1);
     color.address = color.surfaceAddress + mipOffset;
     color.bytes = colorLayout.Bytes();

@@ -56,6 +56,7 @@ struct ColorTarget {
     std::uint32_t depthSlice = 0;
     std::uint32_t exportIndex = 0;
     bool uintExport = false;
+    std::uint32_t pipeBankXor = 0;
 };
 
 struct DepthTarget {
@@ -81,6 +82,9 @@ struct State {
     float depthBiasConstant = 0.0f;
     float depthBiasSlope = 0.0f;
     float depthBiasClamp = 0.0f;
+    bool depthBiasPerFace = false;
+    float backDepthBiasConstant = 0.0f;
+    float backDepthBiasSlope = 0.0f;
     bool stencilTest = false;
     VkStencilOpState stencilFront{};
     VkStencilOpState stencilBack{};
@@ -89,6 +93,7 @@ struct State {
     std::vector<VkPipelineColorBlendAttachmentState> blends;
     bool hasColorTarget;
     bool rectList = false;
+    bool dualSourceBlend = false;
     VkExtent2D renderExtent;
     VkPrimitiveTopology topology;
     bool primitiveRestart = false;

@@ -123,6 +123,7 @@ struct VideoOutConfig {
     uint32_t width = VIDEO_OUT_DEFAULT_WIDTH;
     uint32_t height = VIDEO_OUT_DEFAULT_HEIGHT;
     uint64_t generation = 0;
+    int busType = VIDEO_OUT_BUS_TYPE_MAIN;
     bool opened = false;
     bool closing = false;
     std::exception_ptr failure;
@@ -172,6 +173,7 @@ struct FlipRequest final : AgcDriver::IFlipRequest, std::enable_shared_from_this
     VideoOutBuffer buffer;
     BufferAttributeGroup group;
     bool reserved = false;
+    bool unregistered = false;
     bool ready = false;
     bool gpuComplete = false;
     bool terminal = false;
