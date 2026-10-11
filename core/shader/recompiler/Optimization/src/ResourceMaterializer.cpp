@@ -505,6 +505,8 @@ std::uint32_t colorCompareReference(IrBufferFormat format) {
     case IrBufferFormat::Format11_11_10UNorm: case IrBufferFormat::Format10_11_11UNorm: case IrBufferFormat::Format2_10_10_10UNorm:
     case IrBufferFormat::Format10_10_10_2UNorm: case IrBufferFormat::Format8_8_8_8UNorm: case IrBufferFormat::Format16_16_16_16UNorm:
         return EmulatedCompare::ReferenceUnorm;
+    case IrBufferFormat::Format8Srgb: case IrBufferFormat::Format8_8Srgb: case IrBufferFormat::Format8_8_8_8Srgb:
+        return EmulatedCompare::ReferenceZero;
     case IrBufferFormat::Format8SNorm: case IrBufferFormat::Format16SNorm: case IrBufferFormat::Format8_8SNorm: case IrBufferFormat::Format16_16SNorm:
     case IrBufferFormat::Format11_11_10SNorm: case IrBufferFormat::Format10_11_11SNorm: case IrBufferFormat::Format2_10_10_10SNorm:
     case IrBufferFormat::Format10_10_10_2SNorm: case IrBufferFormat::Format8_8_8_8SNorm: case IrBufferFormat::Format16_16_16_16SNorm:
@@ -528,7 +530,15 @@ std::uint32_t emulatedCompareState(const ShaderInfo& info, const ResourceSnapsho
     const auto reference = colorCompareReference(format);
     const auto type = rawImageType(descriptor);
     if (type != ImageType::Color2D && type != ImageType::Color2DArray && type != ImageType::Cube) throw std::runtime_error("comparison sampling of a color texture is implemented only for 2D, 2D array and cube views");
-    if ((descriptorImageSwizzle(descriptor) & 0x7u) != 4u) throw std::runtime_error("comparison sampling of a color texture is implemented only when the view's X channel is red");
+    bool redChannel = false;
+    bool compareChannel = false;
+    for (std::uint32_t channel = 0u; channel < 4u; ++channel) {
+        const auto select = (descriptorImageSwizzle(descriptor) >> (channel * 3u)) & 0x7u;
+        if (select == 2u || select == 3u) throw std::runtime_error("comparison sampling of a color texture is implemented only when every view channel is a constant or a color channel");
+        redChannel = redChannel || select == 4u;
+        compareChannel = compareChannel || select >= 4u;
+    }
+    if (compareChannel && !redChannel) throw std::runtime_error("comparison sampling of a color texture is implemented only when a view channel selects red");
     std::optional<std::uint32_t> samplerState;
     for (const auto& pair : info.sampledPairs) {
         if (pair.image != index) continue;
@@ -647,6 +657,11 @@ std::vector<ImageResource> ResourceMaterializer::RuntimeImageModes(const ImageRe
             auto line = mode;
             line.dimension = RdnaImageDimension::Dim1D;
             modes.push_back(line);
+        }
+        if (image.dimension == RdnaImageDimension::Dim1D && !storage && !depth && conversion == IrBufferFormat::Invalid && packed == IrBufferFormat::Invalid) {
+            auto plane = mode;
+            plane.dimension = RdnaImageDimension::Dim2D;
+            modes.push_back(plane);
         }
         if (image.dimension == RdnaImageDimension::Dim1DArray || image.dimension == RdnaImageDimension::Dim2DArray || image.dimension == RdnaImageDimension::Dim2DMsaaArray) {
             auto plain = mode;

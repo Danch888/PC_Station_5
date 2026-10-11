@@ -1,3 +1,4 @@
+#include "prx/libSceAgcDriver/Execution/include/PipelineLinkOptimization.hpp"
 #include "Triangle_frag_spv.h"
 #include "Triangle_vert_spv.h"
 #include "prx/libSceAgcDriver/Graphics/include/VertexInput.hpp"
@@ -211,6 +212,12 @@ public:
                 VkPhysicalDeviceProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &libraryProperties};
                 function<PFN_vkGetPhysicalDeviceProperties2>("vkGetPhysicalDeviceProperties2")(context.physical, &properties);
                 context.graphicsPipelineLibrary = library.graphicsPipelineLibrary == VK_TRUE && dynamicState.extendedDynamicState == VK_TRUE && rendering.dynamicRendering == VK_TRUE && libraryProperties.graphicsPipelineLibraryFastLinking == VK_TRUE && properties.properties.limits.maxPushConstantsSize >= PipelinePushConstantBytes;
+                if (context.graphicsPipelineLibrary && hasExtension(VK_KHR_DRIVER_PROPERTIES_EXTENSION_NAME)) {
+                    VkPhysicalDeviceDriverProperties driver{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
+                    VkPhysicalDeviceProperties2 driverProperties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &driver};
+                    function<PFN_vkGetPhysicalDeviceProperties2>("vkGetPhysicalDeviceProperties2")(context.physical, &driverProperties);
+                    context.pipelineLinkTimeOptimization = AgcDriver::PipelineLinkTimeOptimizationUsable(driver.driverID);
+                }
             }
             rendering = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES_KHR, address.pNext, VK_TRUE};
             library = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GRAPHICS_PIPELINE_LIBRARY_FEATURES_EXT, &dynamicState, VK_TRUE};
@@ -4591,6 +4598,33 @@ void pipelineCacheTests(const Device& device, bool benchmark) {
     std::cout << "Pipeline cache key and retained lifetime tests passed\n";
 }
 
+void descriptorPoolTests(const Device& device) {
+    DescriptorCache cache(device.GetContext());
+    const VkDescriptorSetLayoutBinding binding{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 32, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    const std::array<std::uint32_t, 4> key{binding.binding, binding.descriptorType, binding.descriptorCount, binding.stageFlags};
+    const auto layout = cache.Layout(key, std::span(&binding, 1));
+    const VkDescriptorPoolSize size{binding.descriptorType, binding.descriptorCount};
+    const auto held = cache.Allocate(layout, std::span(&size, 1));
+    std::uint64_t initialPools = 0;
+    for (unsigned round = 0; round < 3; ++round) {
+        std::vector<DescriptorCache::SetAllocation> sets;
+        for (unsigned i = 0; i < 1100; ++i) {
+            const auto allocation = cache.Allocate(layout, std::span(&size, 1));
+            Require(allocation.set != VK_NULL_HANDLE, "descriptor pool rollover refused a valid layout");
+            sets.push_back(allocation);
+        }
+        const auto pools = cache.Counters().pools;
+        if (round == 0) {
+            initialPools = pools;
+        } else {
+            Require(pools <= initialPools + 1, "descriptor pool recycling grows behind one retained set");
+        }
+        for (const auto& allocation : sets) cache.Free(allocation);
+    }
+    cache.Free(held);
+    std::cout << "Descriptor pool recycling passed across 3,301 sets (" << initialPools << " initial pools, " << cache.Counters().pools << " final pools)\n";
+}
+
 void keysFillTests(const Device& device, Recorder& recorder) {
     const auto& base = device.GetContext();
     if (base.hostImportAlignment == 0) {
@@ -4863,7 +4897,7 @@ void pipelineLibraryTests(const Device& device) {
     static_cast<void>(lookup());
     Require(counters().built == std::array<std::uint64_t, 4>{2, 2, 3, 3}, "another target format rebuilt more than the fragment output library");
     WaitForOptimizedPipelines(context.device);
-    const auto lto = std::getenv("APS5_NO_PIPELINE_LTO") == nullptr;
+    const auto lto = std::getenv("APS5_NO_PIPELINE_LTO") == nullptr && context.pipelineLinkTimeOptimization;
     Require(counters().optimized == (lto ? counters().linked : 0u), "a linked pipeline was not optimized in the background");
     Require(first->Optimized() == lto && culled->Optimized() == lto, "a pipeline did not switch to its optimized link");
     ClearCachedPipelines(context.device);
@@ -4891,6 +4925,10 @@ int main(int argc, char** argv) {
             return 0;
         }
 
+        if (argc == 2 && std::string_view(argv[1]) == "--descriptor-pool-only") {
+            descriptorPoolTests(device);
+            return 0;
+        }
         std::unique_lock gpu(GpuMutex());
         std::cout << "host imports " << (PrepareImportWatch(device.GetContext()) == ImportWatch::Unwatch ? "are compared" : "stay watched") << '\n';
         Recorder recorder(device.GetContext());
