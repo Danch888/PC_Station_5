@@ -37,8 +37,8 @@ Você deve seguir este checklist rigorosamente. O progresso deve ser salvo e man
   * Instruções detalhadas de compilação do ambiente de desenvolvimento.
   * Guia de uso da ferramenta passo a passo.
   * Hiperlinks explícitos para o projeto original em conformidade com atribuição de licença de código aberto.
-- [ ] **Inicializar Memória Local (`MEMORIA.md`):** Criar um arquivo estruturado para persistência de memória a longo prazo. Deve registrar decisões arquiteturais, bugs encontrados, mapeamentos validados e o estado das próximas tarefas.
-- [ ] **Inicializar Lista de Controle (`CHECKLIST.md`):** Migrar este plano de ação para a raiz do repositório local do agente para acompanhamento síncrono.
+- [ ] **Inicializar Memória Local (`docs/agent/MEMORIA.md`):** Criar um arquivo estruturado para persistência de memória a longo prazo. Deve registrar decisões arquiteturais, bugs encontrados, mapeamentos validados e o estado das próximas tarefas.
+- [ ] **Inicializar Lista de Controle (`docs/agent/CHECKLIST.md`):** Migrar este plano de ação para o diretório `docs/agent/` do repositório local do agente para acompanhamento síncrono. Toda a documentação do agente e referências (como `REF_SISTEMA_GPU.md`, etc) devem obrigatoriamente residir e ser mantidas dentro de `docs/agent/`, e não na raiz do repositório.
 
 ### Fase 2: Pesquisa Avançada e Geração da Biblioteca de Consulta Autônoma
 *Esta fase constitui a prioridade absoluta pós-inicialização. O agente deve realizar varreduras profundas e consolidar as informações locais:*
