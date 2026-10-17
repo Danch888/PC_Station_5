@@ -32,6 +32,14 @@ Per-game progress (stage reached, open blockers, libraries and GPU coverage) is 
 
 SDL-mapped game controllers are supported, including analog sticks and triggers. Keyboard and mouse controls can be configured with an `anyps5-input.ini` file. See [input mapping](docs/user/INPUT_MAPPING.md) for the supported devices and configuration format.
 
+## Credits and References (Créditos e Referências)
+
+Este projeto (PC_Station_5) utiliza diversas referências técnicas e projetos anteriores para sua camada de tradução e compatibilidade. Agradecimentos especiais e referências aos seguintes projetos de código aberto e documentações:
+*   [AnyPS5 (Original)](https://github.com/boykopovar/AnyPS5): O projeto original do qual este repositório é um fork, focado na portabilidade nativa sem emulação.
+*   [KytyPS5](https://github.com/KytyPS5/KytyPS5): Projeto de emulação utilizado como referência primária para mapeamento de memória, pipelines de shaders (Vulkan/SPIR-V) e stubs de kernel (FreeBSD modificado).
+*   [SharpEmu](https://github.com/sharpemu/sharpemu): Emulador em C# usado como referência de descompilação de rotinas de CPU, agendamento de threads e arquitetura de sistema do PS5.
+*   Documentação de hardware da AMD (RDNA 2 ISA e arquitetura Zen 2) e Vulkan API.
+
 ## Disclaimer
 
 This project is intended for interoperability, research, preservation, and compatibility purposes. It does not include, distribute, or require copyrighted software, firmware, cryptographic keys, or proprietary libraries. Users are responsible for ensuring that any binaries used with this project are obtained and used in accordance with applicable laws and their respective license terms.
